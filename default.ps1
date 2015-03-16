@@ -5,7 +5,11 @@ properties {
     $maintainers = "Patrick Lioi"
 
     $configuration = 'Release'
-    $src = resolve-path '.\src'
+	$platform64 = 'x64'
+	$platformAny = 'Any CPU'
+	$base_dir = Resolve-Path .
+    $src = combine_path @($base_dir, "src")
+	$buildPath = combine_path @($base_dir, "build")
     $build = if ($env:build_number -ne $NULL) { $env:build_number } else { '0' }
     $version = [IO.File]::ReadAllText('.\VERSION.txt') + '.' + $build
     $projects = @(gci $src -rec -filter *.csproj)
@@ -25,19 +29,30 @@ task Package -depends Test {
 }
 
 task Test -depends Compile {
-    $fixieRunner = resolve-path ".\build\Fixie.Console.exe"
-    exec { & $fixieRunner $src\Fixie.Tests\bin\$configuration\Fixie.Tests.dll $src\Fixie.Samples\bin\$configuration\Fixie.Samples.dll }
+    Write-Host -ForegroundColor Yellow "Running tests against Any CPU build"
+    $fixieRunner = combine_path @($buildPath, "Fixie.Console.exe")
+	run-unit-tests $fixieRunner
+	
+	Write-Host -ForegroundColor Yellow "Running tests against x64 build"
+	$fixie64Runner = combine_path @($buildPath, "Fixie.Console.x64.exe")
+	run-unit-tests $fixie64Runner
 }
 
 task Compile -depends SanityCheckOutputPaths, AssemblyInfo, License {
   rd .\build -recurse -force  -ErrorAction SilentlyContinue | out-null
-  exec { msbuild /t:clean /v:q /nologo /p:Configuration=$configuration $src\Fixie.sln }
-  exec { msbuild /t:build /v:q /nologo /p:Configuration=$configuration $src\Fixie.sln }
+  compile-source $configuration $platform64 
+  
+  $fixie64Runner = combine_path @($buildPath, "Fixie.Console.exe")
+  rni $fixie64Runner "Fixie.Console.x64.exe"
+  $fixie64Config = combine_path @($buildPath,"Fixie.Console.exe.config")
+  rni $fixie64Config "Fixie.Console.x64.exe.config"
+  
+  compile-source $configuration $platformAny
 }
 
 task SanityCheckOutputPaths {
     $blankLine = ([System.Environment]::NewLine + [System.Environment]::NewLine)
-    $expected = "..\..\build\"
+    $expectedPath = "..\..\build\"
 
     foreach ($project in $projects) {
         $projectName = [System.IO.Path]::GetFileNameWithoutExtension($project)
@@ -50,9 +65,9 @@ task SanityCheckOutputPaths {
 
                     $outputPath = [regex]::Replace($line, '\s*<OutputPath>(.+)</OutputPath>\s*', '$1')
 
-                    if($outputPath -ne $expected){
+                    if($outputPath -ne $expectedPath){
                         $summary = "The project '$projectName' has a suspect *.csproj file."
-                        $detail = "Expected OutputPath to be $expected for all configurations."
+                        $detail = "Expected OutputPath to be $expectedPath for Any CPU configurations"
 
                         Write-Host -ForegroundColor Yellow "$($blankLine)$($summary)  $($detail)$($blankLine)"
                         throw $summary
@@ -115,4 +130,18 @@ function regenerate-file($path, $newContent) {
         write-host "Generating $relativePath"
         [System.IO.File]::WriteAllText($path, $newContent, [System.Text.Encoding]::UTF8)
     }
+}
+
+function combine_path([string[]]$paths) {
+    [System.IO.Path]::GetFullPath(([System.IO.Path]::Combine($paths)))
+}
+
+function compile-source($config, $platform) {
+	Write-Host -ForegroundColor Yellow "Compiling source as $config and platform $platform"
+    exec { msbuild /t:clean /v:q /nologo /p:Configuration=$config /p:Platform=$platform $src\Fixie.sln }
+	exec { msbuild /t:build /v:q /nologo /p:Configuration=$config /p:Platform=$platform $src\Fixie.sln }
+}
+
+function run-unit-tests($fixieRunner) {
+	exec { & $fixieRunner $src\Fixie.Tests\bin\$configuration\Fixie.Tests.dll $src\Fixie.Samples\bin\$configuration\Fixie.Samples.dll }
 }
